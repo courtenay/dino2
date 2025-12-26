@@ -1,6 +1,7 @@
 'use client';
 
-import { X } from 'lucide-react';
+import { X, Terminal } from 'lucide-react';
+import { useLogsModal } from './LogsModalContext';
 import type { K8sNodeData } from '@/lib/graph-builder';
 import type {
   K8sPod,
@@ -75,6 +76,8 @@ function ProbeDetails({ probe }: { probe: K8sProbe }) {
 }
 
 function PodDetails({ pod }: { pod: K8sPod }) {
+  const { openLogs } = useLogsModal();
+
   return (
     <>
       <Section title="Status">
@@ -87,7 +90,22 @@ function PodDetails({ pod }: { pod: K8sPod }) {
           const status = pod.status.containerStatuses?.find((c) => c.name === container.name);
           return (
             <div key={container.name} className="mb-2 p-2 bg-gray-50 rounded">
-              <div className="font-medium">{container.name}</div>
+              <div className="flex items-center justify-between">
+                <div className="font-medium">{container.name}</div>
+                <button
+                  onClick={() =>
+                    openLogs({
+                      namespace: pod.metadata.namespace || 'default',
+                      pod: pod.metadata.name,
+                      container: container.name,
+                    })
+                  }
+                  className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 flex items-center gap-1"
+                >
+                  <Terminal className="w-3 h-3" />
+                  Logs
+                </button>
+              </div>
               <div className="text-xs text-gray-500 truncate">{container.image}</div>
               {status && (
                 <div className="text-xs mt-1">
@@ -360,6 +378,7 @@ function NetworkPolicyDetails({ policy }: { policy: K8sNetworkPolicy }) {
 }
 
 function ContainerDetails({ containerName, pod }: { containerName: string; pod: K8sPod }) {
+  const { openLogs } = useLogsModal();
   const container = pod.spec.containers.find((c) => c.name === containerName);
   const containerStatus = pod.status.containerStatuses?.find((c) => c.name === containerName);
 
@@ -373,6 +392,22 @@ function ContainerDetails({ containerName, pod }: { containerName: string; pod: 
   return (
     <>
       <Section title="Container Info">
+        <div className="flex items-center justify-between py-1 border-b border-gray-100">
+          <span className="text-gray-500">Logs</span>
+          <button
+            onClick={() =>
+              openLogs({
+                namespace: pod.metadata.namespace || 'default',
+                pod: pod.metadata.name,
+                container: containerName,
+              })
+            }
+            className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 flex items-center gap-1"
+          >
+            <Terminal className="w-3 h-3" />
+            View Logs
+          </button>
+        </div>
         <KeyValue label="Image" value={container.image} />
         {isSidecar && (
           <div className="py-1 border-b border-gray-100">
