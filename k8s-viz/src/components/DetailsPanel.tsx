@@ -9,6 +9,9 @@ import type {
   K8sIngress,
   K8sConfigMap,
   K8sSecret,
+  K8sProbe,
+  K8sPersistentVolumeClaim,
+  K8sNetworkPolicy,
 } from '@/types/k8s';
 
 interface DetailsPanelProps {
@@ -31,6 +34,42 @@ function KeyValue({ label, value }: { label: string; value: string | number | un
     <div className="flex justify-between py-1 border-b border-gray-100">
       <span className="text-gray-500">{label}</span>
       <span className="font-mono text-gray-900">{value}</span>
+    </div>
+  );
+}
+
+function ProbeDetails({ probe }: { probe: K8sProbe }) {
+  return (
+    <div className="text-xs space-y-1">
+      {probe.httpGet && (
+        <div className="font-mono">
+          HTTP GET {probe.httpGet.scheme || 'HTTP'}://*:{probe.httpGet.port}{probe.httpGet.path}
+        </div>
+      )}
+      {probe.tcpSocket && (
+        <div className="font-mono">
+          TCP :{probe.tcpSocket.port}
+        </div>
+      )}
+      {probe.exec && (
+        <div className="font-mono truncate" title={probe.exec.command.join(' ')}>
+          exec: {probe.exec.command.join(' ')}
+        </div>
+      )}
+      <div className="text-gray-500 flex flex-wrap gap-2">
+        {probe.initialDelaySeconds !== undefined && (
+          <span>delay: {probe.initialDelaySeconds}s</span>
+        )}
+        {probe.periodSeconds !== undefined && (
+          <span>period: {probe.periodSeconds}s</span>
+        )}
+        {probe.timeoutSeconds !== undefined && (
+          <span>timeout: {probe.timeoutSeconds}s</span>
+        )}
+        {probe.failureThreshold !== undefined && (
+          <span>failures: {probe.failureThreshold}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -190,14 +229,331 @@ function SecretDetails({ secret }: { secret: K8sSecret }) {
   );
 }
 
+function PvcDetails({ pvc }: { pvc: K8sPersistentVolumeClaim }) {
+  return (
+    <>
+      <Section title="Storage">
+        <KeyValue label="Requested" value={pvc.spec.resources.requests.storage} />
+        {pvc.status?.capacity?.storage && (
+          <KeyValue label="Capacity" value={pvc.status.capacity.storage} />
+        )}
+      </Section>
+      <Section title="Configuration">
+        <KeyValue label="Status" value={pvc.status?.phase} />
+        <KeyValue label="Access Modes" value={pvc.spec.accessModes.join(', ')} />
+        {pvc.spec.storageClassName && (
+          <KeyValue label="Storage Class" value={pvc.spec.storageClassName} />
+        )}
+        {pvc.spec.volumeName && (
+          <KeyValue label="Volume" value={pvc.spec.volumeName} />
+        )}
+        {pvc.spec.volumeMode && (
+          <KeyValue label="Volume Mode" value={pvc.spec.volumeMode} />
+        )}
+      </Section>
+    </>
+  );
+}
+
+function NetworkPolicyDetails({ policy }: { policy: K8sNetworkPolicy }) {
+  const policyTypes = policy.spec.policyTypes || [];
+
+  return (
+    <>
+      <Section title="Policy Types">
+        <div className="flex gap-2">
+          {policyTypes.includes('Ingress') && (
+            <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">Ingress</span>
+          )}
+          {policyTypes.includes('Egress') && (
+            <span className="px-2 py-1 bg-purple-100 text-purple-700 text-xs rounded">Egress</span>
+          )}
+          {policyTypes.length === 0 && (
+            <span className="text-gray-400">No policy types specified</span>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Pod Selector">
+        {policy.spec.podSelector.matchLabels ? (
+          Object.entries(policy.spec.podSelector.matchLabels).map(([key, value]) => (
+            <div key={key} className="font-mono text-xs py-1">
+              {key}: {value}
+            </div>
+          ))
+        ) : (
+          <div className="text-gray-500 text-xs">All pods in namespace</div>
+        )}
+      </Section>
+
+      {policy.spec.ingress && policy.spec.ingress.length > 0 && (
+        <Section title="Ingress Rules">
+          {policy.spec.ingress.map((rule, i) => (
+            <div key={i} className="mb-2 p-2 bg-blue-50 rounded text-xs">
+              {rule.from ? (
+                <div>
+                  <div className="font-medium text-blue-700 mb-1">From:</div>
+                  {rule.from.map((from, j) => (
+                    <div key={j} className="ml-2 text-gray-600">
+                      {from.podSelector && (
+                        <div>Pods: {JSON.stringify(from.podSelector.matchLabels || {})}</div>
+                      )}
+                      {from.namespaceSelector && (
+                        <div>Namespaces: {JSON.stringify(from.namespaceSelector.matchLabels || {})}</div>
+                      )}
+                      {from.ipBlock && (
+                        <div>IP Block: {from.ipBlock.cidr}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-blue-600">Allow all sources</div>
+              )}
+              {rule.ports && (
+                <div className="mt-1">
+                  <span className="text-gray-500">Ports: </span>
+                  {rule.ports.map((p) => `${p.port}/${p.protocol || 'TCP'}`).join(', ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {policy.spec.egress && policy.spec.egress.length > 0 && (
+        <Section title="Egress Rules">
+          {policy.spec.egress.map((rule, i) => (
+            <div key={i} className="mb-2 p-2 bg-purple-50 rounded text-xs">
+              {rule.to ? (
+                <div>
+                  <div className="font-medium text-purple-700 mb-1">To:</div>
+                  {rule.to.map((to, j) => (
+                    <div key={j} className="ml-2 text-gray-600">
+                      {to.podSelector && (
+                        <div>Pods: {JSON.stringify(to.podSelector.matchLabels || {})}</div>
+                      )}
+                      {to.namespaceSelector && (
+                        <div>Namespaces: {JSON.stringify(to.namespaceSelector.matchLabels || {})}</div>
+                      )}
+                      {to.ipBlock && (
+                        <div>IP Block: {to.ipBlock.cidr}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-purple-600">Allow all destinations</div>
+              )}
+              {rule.ports && (
+                <div className="mt-1">
+                  <span className="text-gray-500">Ports: </span>
+                  {rule.ports.map((p) => `${p.port}/${p.protocol || 'TCP'}`).join(', ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </Section>
+      )}
+    </>
+  );
+}
+
+function ContainerDetails({ containerName, pod }: { containerName: string; pod: K8sPod }) {
+  const container = pod.spec.containers.find((c) => c.name === containerName);
+  const containerStatus = pod.status.containerStatuses?.find((c) => c.name === containerName);
+
+  if (!container) {
+    return <div className="text-gray-400">Container not found</div>;
+  }
+
+  const isPrivileged = container.securityContext?.privileged === true;
+  const isSidecar = pod.spec.containers.indexOf(container) > 0;
+
+  return (
+    <>
+      <Section title="Container Info">
+        <KeyValue label="Image" value={container.image} />
+        {isSidecar && (
+          <div className="py-1 border-b border-gray-100">
+            <span className="text-gray-500">Role</span>
+            <span className="ml-2 px-2 py-0.5 bg-cyan-100 text-cyan-700 text-xs rounded">Sidecar</span>
+          </div>
+        )}
+        {isPrivileged && (
+          <div className="py-1 border-b border-gray-100">
+            <span className="text-gray-500">Security</span>
+            <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded">Privileged</span>
+          </div>
+        )}
+      </Section>
+
+      {containerStatus && (
+        <Section title="Status">
+          <KeyValue label="Ready" value={containerStatus.ready ? 'Yes' : 'No'} />
+          <KeyValue label="Restarts" value={containerStatus.restartCount} />
+          {containerStatus.state?.running && (
+            <KeyValue label="Started" value={new Date(containerStatus.state.running.startedAt).toLocaleString()} />
+          )}
+          {containerStatus.state?.waiting && (
+            <KeyValue label="Waiting" value={containerStatus.state.waiting.reason} />
+          )}
+          {containerStatus.state?.terminated && (
+            <KeyValue label="Exit Code" value={containerStatus.state.terminated.exitCode} />
+          )}
+        </Section>
+      )}
+
+      {container.ports && container.ports.length > 0 && (
+        <Section title="Ports">
+          {container.ports.map((port, i) => (
+            <div key={i} className="py-1 font-mono text-xs">
+              {port.containerPort}/{port.protocol || 'TCP'}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {container.securityContext && (
+        <Section title="Security Context">
+          {container.securityContext.runAsUser !== undefined && (
+            <KeyValue label="Run As User" value={container.securityContext.runAsUser} />
+          )}
+          {container.securityContext.runAsGroup !== undefined && (
+            <KeyValue label="Run As Group" value={container.securityContext.runAsGroup} />
+          )}
+          {container.securityContext.runAsNonRoot !== undefined && (
+            <KeyValue label="Run As Non-Root" value={container.securityContext.runAsNonRoot ? 'Yes' : 'No'} />
+          )}
+          {container.securityContext.capabilities?.add && (
+            <div className="py-1 border-b border-gray-100">
+              <div className="text-gray-500 text-xs">Capabilities Added</div>
+              <div className="font-mono text-xs">{container.securityContext.capabilities.add.join(', ')}</div>
+            </div>
+          )}
+          {container.securityContext.capabilities?.drop && (
+            <div className="py-1 border-b border-gray-100">
+              <div className="text-gray-500 text-xs">Capabilities Dropped</div>
+              <div className="font-mono text-xs">{container.securityContext.capabilities.drop.join(', ')}</div>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {container.volumeMounts && container.volumeMounts.length > 0 && (
+        <Section title="Volume Mounts">
+          {container.volumeMounts.map((mount, i) => (
+            <div key={i} className="py-1 border-b border-gray-100">
+              <div className="font-mono text-xs text-gray-900">{mount.mountPath}</div>
+              <div className="text-xs text-gray-500">
+                {mount.name} {mount.readOnly ? '(read-only)' : ''}
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {container.resources && (container.resources.limits || container.resources.requests) && (
+        <Section title="Resources">
+          {container.resources.requests && (
+            <div className="mb-2">
+              <div className="text-xs text-gray-500 mb-1">Requests</div>
+              {container.resources.requests.cpu && (
+                <div className="flex justify-between py-0.5">
+                  <span className="text-gray-600">CPU</span>
+                  <span className="font-mono text-xs">{container.resources.requests.cpu}</span>
+                </div>
+              )}
+              {container.resources.requests.memory && (
+                <div className="flex justify-between py-0.5">
+                  <span className="text-gray-600">Memory</span>
+                  <span className="font-mono text-xs">{container.resources.requests.memory}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {container.resources.limits && (
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Limits</div>
+              {container.resources.limits.cpu && (
+                <div className="flex justify-between py-0.5">
+                  <span className="text-gray-600">CPU</span>
+                  <span className="font-mono text-xs">{container.resources.limits.cpu}</span>
+                </div>
+              )}
+              {container.resources.limits.memory && (
+                <div className="flex justify-between py-0.5">
+                  <span className="text-gray-600">Memory</span>
+                  <span className="font-mono text-xs">{container.resources.limits.memory}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {(container.livenessProbe || container.readinessProbe || container.startupProbe) && (
+        <Section title="Health Probes">
+          {container.livenessProbe && (
+            <div className="mb-2 p-2 bg-green-50 rounded border border-green-200">
+              <div className="text-xs font-medium text-green-700 mb-1">Liveness</div>
+              <ProbeDetails probe={container.livenessProbe} />
+            </div>
+          )}
+          {container.readinessProbe && (
+            <div className="mb-2 p-2 bg-blue-50 rounded border border-blue-200">
+              <div className="text-xs font-medium text-blue-700 mb-1">Readiness</div>
+              <ProbeDetails probe={container.readinessProbe} />
+            </div>
+          )}
+          {container.startupProbe && (
+            <div className="p-2 bg-purple-50 rounded border border-purple-200">
+              <div className="text-xs font-medium text-purple-700 mb-1">Startup</div>
+              <ProbeDetails probe={container.startupProbe} />
+            </div>
+          )}
+        </Section>
+      )}
+
+      {container.env && container.env.length > 0 && (
+        <Section title="Environment Variables">
+          {container.env.map((env, i) => (
+            <div key={i} className="py-1 border-b border-gray-100 font-mono text-xs">
+              <span className="text-gray-700">{env.name}</span>
+              {env.valueFrom?.secretKeyRef && (
+                <span className="text-red-500 ml-1">← secret:{env.valueFrom.secretKeyRef.name}</span>
+              )}
+              {env.valueFrom?.configMapKeyRef && (
+                <span className="text-orange-500 ml-1">← configmap:{env.valueFrom.configMapKeyRef.name}</span>
+              )}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      <Section title="Parent Pod">
+        <KeyValue label="Pod Name" value={pod.metadata.name} />
+        <KeyValue label="Pod IP" value={pod.status.podIP} />
+        <KeyValue label="Node" value={pod.spec.nodeName} />
+      </Section>
+    </>
+  );
+}
+
 const typeColors: Record<string, string> = {
   internet: 'bg-gray-500',
+  ingresscontroller: 'bg-amber-500',
+  proxy: 'bg-orange-500',
   ingress: 'bg-purple-500',
+  route: 'bg-violet-400',
   service: 'bg-blue-500',
   deployment: 'bg-green-500',
   pod: 'bg-teal-500',
+  container: 'bg-slate-500',
   configmap: 'bg-orange-500',
   secret: 'bg-red-500',
+  pvc: 'bg-violet-500',
+  networkpolicy: 'bg-emerald-500',
 };
 
 export function DetailsPanel({ data, onClose }: DetailsPanelProps) {
@@ -244,8 +600,25 @@ export function DetailsPanel({ data, onClose }: DetailsPanelProps) {
         {data.type === 'secret' && data.resource && (
           <SecretDetails secret={data.resource as K8sSecret} />
         )}
+        {data.type === 'pvc' && data.resource && (
+          <PvcDetails pvc={data.resource as K8sPersistentVolumeClaim} />
+        )}
+        {data.type === 'networkpolicy' && data.resource && (
+          <NetworkPolicyDetails policy={data.resource as K8sNetworkPolicy} />
+        )}
+        {data.type === 'container' && data.resource && (
+          <ContainerDetails containerName={data.name} pod={data.resource as K8sPod} />
+        )}
         {data.type === 'internet' && (
           <div className="text-gray-500">External traffic entry point</div>
+        )}
+        {(data.type === 'ingresscontroller' || data.type === 'proxy') && (
+          <div className="text-gray-500">
+            {data.type === 'ingresscontroller' ? 'Ingress controller managing external traffic' : 'Reverse proxy routing requests to services'}
+          </div>
+        )}
+        {data.type === 'route' && (
+          <div className="text-gray-500">Route path from ingress rule</div>
         )}
 
         {data.resource?.metadata && (

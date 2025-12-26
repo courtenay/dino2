@@ -5,6 +5,8 @@ import type {
   K8sIngress,
   K8sConfigMap,
   K8sSecret,
+  K8sPersistentVolumeClaim,
+  K8sNetworkPolicy,
   K8sResourceList,
   ClusterData,
 } from '@/types/k8s';
@@ -78,8 +80,24 @@ export async function getSecrets(namespace?: string): Promise<K8sSecret[]> {
   return result.items;
 }
 
+export async function getPersistentVolumeClaims(namespace?: string): Promise<K8sPersistentVolumeClaim[]> {
+  const path = namespace
+    ? `/api/v1/namespaces/${namespace}/persistentvolumeclaims`
+    : '/api/v1/persistentvolumeclaims';
+  const result = await fetchK8s<K8sResourceList<K8sPersistentVolumeClaim>>(path);
+  return result.items;
+}
+
+export async function getNetworkPolicies(namespace?: string): Promise<K8sNetworkPolicy[]> {
+  const path = namespace
+    ? `/apis/networking.k8s.io/v1/namespaces/${namespace}/networkpolicies`
+    : '/apis/networking.k8s.io/v1/networkpolicies';
+  const result = await fetchK8s<K8sResourceList<K8sNetworkPolicy>>(path);
+  return result.items;
+}
+
 export async function getAllClusterData(): Promise<ClusterData> {
-  const [namespaces, pods, services, deployments, ingresses, configMaps, secrets] =
+  const [namespaces, pods, services, deployments, ingresses, configMaps, secrets, persistentVolumeClaims, networkPolicies] =
     await Promise.all([
       getNamespaces(),
       getPods(),
@@ -88,6 +106,8 @@ export async function getAllClusterData(): Promise<ClusterData> {
       getIngresses(),
       getConfigMaps(),
       getSecrets(),
+      getPersistentVolumeClaims(),
+      getNetworkPolicies(),
     ]);
 
   return {
@@ -98,5 +118,7 @@ export async function getAllClusterData(): Promise<ClusterData> {
     ingresses,
     configMaps,
     secrets,
+    persistentVolumeClaims,
+    networkPolicies,
   };
 }

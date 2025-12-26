@@ -5,8 +5,11 @@ import { RouteNode } from './RouteNode';
 import { ServiceNode } from './ServiceNode';
 import { DeploymentNode } from './DeploymentNode';
 import { PodNode } from './PodNode';
+import { ContainerNode } from './ContainerNode';
 import { ConfigMapNode } from './ConfigMapNode';
 import { SecretNode } from './SecretNode';
+import { PvcNode } from './PvcNode';
+import { NetworkPolicyNode } from './NetworkPolicyNode';
 
 export {
   InternetNode,
@@ -16,8 +19,11 @@ export {
   ServiceNode,
   DeploymentNode,
   PodNode,
+  ContainerNode,
   ConfigMapNode,
   SecretNode,
+  PvcNode,
+  NetworkPolicyNode,
 };
 
 export const nodeTypes = {
@@ -28,6 +34,9 @@ export const nodeTypes = {
   serviceNode: ServiceNode,
   deploymentNode: DeploymentNode,
   podNode: PodNode,
+  containerNode: ContainerNode,
   configmapNode: ConfigMapNode,
   secretNode: SecretNode,
+  pvcNode: PvcNode,
+  networkpolicyNode: NetworkPolicyNode,
 };

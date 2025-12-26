@@ -7,6 +7,8 @@ import type {
   K8sIngress,
   K8sConfigMap,
   K8sSecret,
+  K8sPersistentVolumeClaim,
+  K8sNetworkPolicy,
 } from '@/types/k8s';
 import { applyDagreLayout } from './layout';
 
@@ -18,8 +20,11 @@ export type NodeType =
   | 'service'
   | 'deployment'
   | 'pod'
+  | 'container'
   | 'configmap'
   | 'secret'
+  | 'pvc'
+  | 'networkpolicy'
   | 'route';
 
 export type ViewMode = 'resources' | 'routing';
@@ -28,9 +33,9 @@ export interface K8sNodeData {
   type: NodeType;
   name: string;
   namespace?: string;
-  resource: K8sPod | K8sService | K8sDeployment | K8sIngress | K8sConfigMap | K8sSecret | null;
+  resource: K8sPod | K8sService | K8sDeployment | K8sIngress | K8sConfigMap | K8sSecret | K8sPersistentVolumeClaim | K8sNetworkPolicy | null;
   status?: 'healthy' | 'warning' | 'error' | 'unknown';
-  info?: Record<string, string | number | string[]>;
+  info?: Record<string, string | number | boolean | string[]>;
   isIngressController?: boolean;
   isProxy?: boolean;
 }
@@ -51,6 +56,51 @@ const PROXY_PATTERNS = {
   names: [/^nginx/i, /^proxy/i, /^gateway/i, /^haproxy/i, /^envoy/i, /^caddy/i, /^traefik/i],
   images: ['nginx', 'haproxy', 'envoy', 'caddy', 'traefik', 'httpd', 'apache'],
 };
+
+// Common non-HTTP service ports (databases, caches, message queues, etc.)
+const NON_HTTP_PORTS = new Set([
+  5432,  // PostgreSQL
+  3306,  // MySQL
+  1433,  // SQL Server
+  1521,  // Oracle
+  27017, // MongoDB
+  6379,  // Redis
+  11211, // Memcached
+  5672,  // RabbitMQ AMQP
+  9092,  // Kafka
+  2181,  // Zookeeper
+  9042,  // Cassandra
+  8529,  // ArangoDB
+  7474,  // Neo4j
+  26257, // CockroachDB
+  4222,  // NATS
+  6650,  // Pulsar
+  9200,  // Elasticsearch (often HTTP but typically internal)
+]);
+
+// Check if a service looks like an HTTP/web service based on its ports
+function isHttpService(service: K8sService): boolean {
+  const ports = service.spec.ports;
+  if (!ports || ports.length === 0) return false;
+
+  // Check if any port looks like an HTTP service
+  return ports.some((p) => {
+    // Explicit non-HTTP ports
+    if (NON_HTTP_PORTS.has(p.port)) return false;
+    if (NON_HTTP_PORTS.has(typeof p.targetPort === 'number' ? p.targetPort : 0)) return false;
+
+    // Common HTTP port patterns
+    if (p.port === 80 || p.port === 443 || p.port === 8080 || p.port === 8443) return true;
+
+    // Named ports suggesting HTTP
+    if (p.name && /^(http|https|web|api|grpc)/.test(p.name)) return true;
+
+    // Ports in common web app ranges (3000-9999 excluding known non-HTTP)
+    if (p.port >= 3000 && p.port <= 9999) return true;
+
+    return false;
+  });
+}
 
 function isIngressController(pod: K8sPod): boolean {
   const ns = pod.metadata.namespace || '';
@@ -386,7 +436,7 @@ export function buildRoutingGraph(
   // Identify which services are proxy services (to exclude from regular services)
   const proxyServiceNames = new Set(proxyServices.map((s) => `${s.metadata.namespace}:${s.metadata.name}`));
 
-  // Add services - all services in routing view to show the topology
+  // Add services - only services relevant to routing topology
   services.forEach((service) => {
     const svcKey = `${service.metadata.namespace}:${service.metadata.name}`;
 
@@ -397,6 +447,14 @@ export function buildRoutingGraph(
     const routeId = `route:${svcKey}`;
     const isRouteBackend = routesByService.has(svcKey);
     const isExternalService = service.spec.type === 'LoadBalancer' || service.spec.type === 'NodePort';
+    const isHttpSvc = isHttpService(service);
+
+    // In routing view, only show services that are part of the routing topology:
+    // - Route backends (ingress targets)
+    // - External services (LoadBalancer/NodePort)
+    // - HTTP services when we have a proxy (potential proxy targets)
+    const shouldShow = isRouteBackend || isExternalService || (hasProxy && isHttpSvc);
+    if (!shouldShow) return;
 
     const id = getNodeId('service', service.metadata.namespace, service.metadata.name);
 
@@ -443,7 +501,8 @@ export function buildRoutingGraph(
     }
 
     // Connect Proxy to Service (if we have a proxy but no ingress controller)
-    if (hasProxy && !hasIngressController && !isExternalService) {
+    // Only connect to HTTP/web services, not databases
+    if (hasProxy && !hasIngressController && !isExternalService && isHttpService(service)) {
       proxyDeployments.forEach((proxy) => {
         const proxyId = getNodeId('proxy', proxy.metadata.namespace, proxy.metadata.name);
         // Only connect if in the same namespace or proxy is in a shared namespace
@@ -470,6 +529,7 @@ export function buildRoutingGraph(
           labelsMatch(service.spec.selector!, pod.metadata.labels)
         ) {
           const podId = getNodeId('pod', pod.metadata.namespace, pod.metadata.name);
+          const containerCount = pod.spec.containers.length;
 
           if (!nodeIds.has(podId)) {
             nodes.push({
@@ -485,11 +545,67 @@ export function buildRoutingGraph(
                 info: {
                   phase: pod.status.phase,
                   ip: pod.status.podIP || 'pending',
-                  containers: pod.spec.containers.length,
+                  containers: containerCount,
                 },
               },
             });
             nodeIds.add(podId);
+
+            // Add container nodes for pods with multiple containers (sidecars)
+            if (containerCount > 1) {
+              pod.spec.containers.forEach((container, index) => {
+                const containerStatus = pod.status.containerStatuses?.find((cs) => cs.name === container.name);
+                const containerId = `${podId}:container:${container.name}`;
+                const containerPorts = container.ports?.map((p) => p.containerPort).join(', ') || '';
+                const containerRestarts = containerStatus?.restartCount || 0;
+                const isReady = containerStatus?.ready ?? false;
+                const isSidecar = index > 0;
+                const isPrivileged = container.securityContext?.privileged === true;
+
+                let status: 'healthy' | 'warning' | 'error' | 'unknown' = 'unknown';
+                if (containerStatus) {
+                  if (containerStatus.state?.running && isReady) {
+                    status = 'healthy';
+                  } else if (containerStatus.state?.waiting) {
+                    status = 'warning';
+                  } else if (containerStatus.state?.terminated) {
+                    status = containerStatus.state.terminated.exitCode === 0 ? 'healthy' : 'error';
+                  }
+                }
+
+                nodes.push({
+                  id: containerId,
+                  type: 'containerNode',
+                  position: { x: 0, y: 0 },
+                  data: {
+                    type: 'container',
+                    name: container.name,
+                    namespace: pod.metadata.namespace,
+                    resource: pod,
+                    status,
+                    info: {
+                      image: container.image,
+                      ports: containerPorts,
+                      restarts: containerRestarts,
+                      ready: isReady,
+                      sidecar: isSidecar,
+                      privileged: isPrivileged,
+                    },
+                  },
+                });
+                nodeIds.add(containerId);
+
+                edges.push({
+                  id: `${podId}->${containerId}`,
+                  source: podId,
+                  target: containerId,
+                  style: {
+                    stroke: isSidecar ? '#06b6d4' : '#64748b',
+                    strokeWidth: 1,
+                  },
+                });
+              });
+            }
           }
 
           edges.push({
@@ -672,6 +788,7 @@ export function buildResourceGraph(
     const restarts = pod.status.containerStatuses?.reduce((sum, c) => sum + c.restartCount, 0) || 0;
     const isController = isIngressController(pod);
     const isProxy = isProxyPod(pod);
+    const containerCount = pod.spec.containers.length;
 
     nodes.push({
       id,
@@ -689,11 +806,73 @@ export function buildResourceGraph(
           phase: pod.status.phase,
           restarts,
           ip: pod.status.podIP || 'pending',
-          containers: pod.spec.containers.length,
+          containers: containerCount,
         },
       },
     });
     nodeIds.add(id);
+
+    // Add container nodes for pods with multiple containers (sidecars)
+    if (containerCount > 1) {
+      pod.spec.containers.forEach((container, index) => {
+        const containerStatus = pod.status.containerStatuses?.find((cs) => cs.name === container.name);
+        const containerId = `${id}:container:${container.name}`;
+        const containerPorts = container.ports?.map((p) => p.containerPort).join(', ') || '';
+        const containerRestarts = containerStatus?.restartCount || 0;
+        const isReady = containerStatus?.ready ?? false;
+
+        // Determine if this is a sidecar (not the first/main container)
+        const isSidecar = index > 0;
+
+        // Check if container is privileged
+        const isPrivileged = container.securityContext?.privileged === true;
+
+        // Get container status
+        let status: 'healthy' | 'warning' | 'error' | 'unknown' = 'unknown';
+        if (containerStatus) {
+          if (containerStatus.state?.running && isReady) {
+            status = 'healthy';
+          } else if (containerStatus.state?.waiting) {
+            status = 'warning';
+          } else if (containerStatus.state?.terminated) {
+            status = containerStatus.state.terminated.exitCode === 0 ? 'healthy' : 'error';
+          }
+        }
+
+        nodes.push({
+          id: containerId,
+          type: 'containerNode',
+          position: { x: 0, y: 0 },
+          data: {
+            type: 'container',
+            name: container.name,
+            namespace: pod.metadata.namespace,
+            resource: pod,
+            status,
+            info: {
+              image: container.image,
+              ports: containerPorts,
+              restarts: containerRestarts,
+              ready: isReady,
+              sidecar: isSidecar,
+              privileged: isPrivileged,
+            },
+          },
+        });
+        nodeIds.add(containerId);
+
+        // Connect pod to container
+        edges.push({
+          id: `${id}->${containerId}`,
+          source: id,
+          target: containerId,
+          style: {
+            stroke: isSidecar ? '#06b6d4' : '#64748b',
+            strokeWidth: 1,
+          },
+        });
+      });
+    }
 
     pod.metadata.ownerReferences?.forEach((owner) => {
       if (owner.kind === 'ReplicaSet') {
@@ -809,6 +988,45 @@ export function buildResourceGraph(
       nodeIds.add(id);
     });
 
+  // PersistentVolumeClaims
+  const referencedPVCs = new Set<string>();
+  pods.forEach((pod) => {
+    pod.spec.volumes?.forEach((vol) => {
+      if (vol.persistentVolumeClaim) {
+        referencedPVCs.add(`${pod.metadata.namespace}:${vol.persistentVolumeClaim.claimName}`);
+      }
+    });
+  });
+
+  const pvcs = filterByNamespace(data.persistentVolumeClaims);
+  pvcs
+    .filter((pvc) => referencedPVCs.has(`${pvc.metadata.namespace}:${pvc.metadata.name}`))
+    .forEach((pvc) => {
+      const id = getNodeId('pvc', pvc.metadata.namespace, pvc.metadata.name);
+      const status = pvc.status?.phase === 'Bound' ? 'healthy' : pvc.status?.phase === 'Pending' ? 'warning' : 'error';
+
+      nodes.push({
+        id,
+        type: 'pvcNode',
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'pvc',
+          name: pvc.metadata.name,
+          namespace: pvc.metadata.namespace,
+          resource: pvc,
+          status,
+          info: {
+            storage: pvc.spec.resources.requests.storage,
+            accessModes: pvc.spec.accessModes.join(', '),
+            storageClass: pvc.spec.storageClassName || 'default',
+            phase: pvc.status?.phase || 'Unknown',
+          },
+        },
+      });
+      nodeIds.add(id);
+    });
+
+  // Connect pods to their config resources
   pods.forEach((pod) => {
     const podId = getNodeId('pod', pod.metadata.namespace, pod.metadata.name);
 
@@ -834,6 +1052,72 @@ export function buildResourceGraph(
             style: { stroke: '#ef4444', strokeDasharray: '3,3' },
           });
         }
+      }
+      if (vol.persistentVolumeClaim) {
+        const pvcId = getNodeId('pvc', pod.metadata.namespace, vol.persistentVolumeClaim.claimName);
+        if (nodeIds.has(pvcId)) {
+          edges.push({
+            id: `${podId}->${pvcId}`,
+            source: podId,
+            target: pvcId,
+            style: { stroke: '#8b5cf6', strokeDasharray: '3,3' },
+          });
+        }
+      }
+    });
+  });
+
+  // NetworkPolicies - show policies and connect to affected pods
+  const networkPolicies = filterByNamespace(data.networkPolicies);
+  networkPolicies.forEach((policy) => {
+    const id = getNodeId('networkpolicy', policy.metadata.namespace, policy.metadata.name);
+    const policyTypes = policy.spec.policyTypes || [];
+    const ingressRules = policy.spec.ingress?.length || 0;
+    const egressRules = policy.spec.egress?.length || 0;
+
+    // Find pods affected by this policy (matching podSelector)
+    const affectedPods = pods.filter((pod) => {
+      if (pod.metadata.namespace !== policy.metadata.namespace) return false;
+      const selector = policy.spec.podSelector.matchLabels || {};
+      // Empty selector matches all pods in namespace
+      if (Object.keys(selector).length === 0) return true;
+      return labelsMatch(selector, pod.metadata.labels);
+    });
+
+    nodes.push({
+      id,
+      type: 'networkpolicyNode',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'networkpolicy',
+        name: policy.metadata.name,
+        namespace: policy.metadata.namespace,
+        resource: policy,
+        status: 'healthy',
+        info: {
+          policyTypes,
+          ingressRules,
+          egressRules,
+          targetPods: affectedPods.length,
+        },
+      },
+    });
+    nodeIds.add(id);
+
+    // Connect policy to affected pods
+    affectedPods.forEach((pod) => {
+      const podId = getNodeId('pod', pod.metadata.namespace, pod.metadata.name);
+      if (nodeIds.has(podId)) {
+        edges.push({
+          id: `${id}->${podId}`,
+          source: id,
+          target: podId,
+          style: { stroke: '#10b981', strokeDasharray: '5,3' },
+          label: policyTypes.includes('Ingress') && policyTypes.includes('Egress') ? 'I/E' :
+                 policyTypes.includes('Ingress') ? 'In' : 'Out',
+          labelStyle: { fontSize: 8, fill: '#10b981' },
+          labelBgStyle: { fill: 'white', fillOpacity: 0.8 },
+        });
       }
     });
   });

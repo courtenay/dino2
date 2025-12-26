@@ -15,6 +15,22 @@ export interface K8sMetadata {
   }>;
 }
 
+export interface K8sProbe {
+  httpGet?: { path: string; port: number | string; scheme?: string };
+  tcpSocket?: { port: number | string };
+  exec?: { command: string[] };
+  initialDelaySeconds?: number;
+  periodSeconds?: number;
+  timeoutSeconds?: number;
+  successThreshold?: number;
+  failureThreshold?: number;
+}
+
+export interface K8sResources {
+  limits?: { cpu?: string; memory?: string };
+  requests?: { cpu?: string; memory?: string };
+}
+
 export interface K8sPod {
   kind: 'Pod';
   apiVersion: string;
@@ -23,20 +39,38 @@ export interface K8sPod {
     containers: Array<{
       name: string;
       image: string;
-      ports?: Array<{ containerPort: number; protocol?: string }>;
+      ports?: Array<{ containerPort: number; protocol?: string; name?: string }>;
       env?: Array<{
         name: string;
+        value?: string;
         valueFrom?: {
           secretKeyRef?: { name: string; key: string };
           configMapKeyRef?: { name: string; key: string };
         };
       }>;
-      volumeMounts?: Array<{ name: string; mountPath: string }>;
+      volumeMounts?: Array<{ name: string; mountPath: string; readOnly?: boolean; subPath?: string }>;
+      securityContext?: {
+        privileged?: boolean;
+        runAsUser?: number;
+        runAsGroup?: number;
+        runAsNonRoot?: boolean;
+        capabilities?: {
+          add?: string[];
+          drop?: string[];
+        };
+      };
+      resources?: K8sResources;
+      livenessProbe?: K8sProbe;
+      readinessProbe?: K8sProbe;
+      startupProbe?: K8sProbe;
     }>;
     volumes?: Array<{
       name: string;
       secret?: { secretName: string };
       configMap?: { name: string };
+      persistentVolumeClaim?: { claimName: string };
+      emptyDir?: Record<string, unknown>;
+      hostPath?: { path: string; type?: string };
     }>;
     nodeName?: string;
   };
@@ -165,7 +199,68 @@ export interface K8sSecret {
   stringData?: Record<string, string>;
 }
 
-export type K8sResource = K8sPod | K8sService | K8sDeployment | K8sIngress | K8sConfigMap | K8sSecret;
+export interface K8sPersistentVolumeClaim {
+  kind: 'PersistentVolumeClaim';
+  apiVersion: string;
+  metadata: K8sMetadata;
+  spec: {
+    accessModes: string[];
+    resources: {
+      requests: { storage: string };
+    };
+    storageClassName?: string;
+    volumeName?: string;
+    volumeMode?: string;
+  };
+  status?: {
+    phase: 'Pending' | 'Bound' | 'Lost';
+    capacity?: { storage: string };
+    accessModes?: string[];
+  };
+}
+
+export interface K8sNetworkPolicy {
+  kind: 'NetworkPolicy';
+  apiVersion: string;
+  metadata: K8sMetadata;
+  spec: {
+    podSelector: {
+      matchLabels?: Record<string, string>;
+      matchExpressions?: Array<{
+        key: string;
+        operator: string;
+        values?: string[];
+      }>;
+    };
+    policyTypes?: Array<'Ingress' | 'Egress'>;
+    ingress?: Array<{
+      from?: Array<{
+        podSelector?: { matchLabels?: Record<string, string> };
+        namespaceSelector?: { matchLabels?: Record<string, string> };
+        ipBlock?: { cidr: string; except?: string[] };
+      }>;
+      ports?: Array<{
+        protocol?: string;
+        port?: number | string;
+        endPort?: number;
+      }>;
+    }>;
+    egress?: Array<{
+      to?: Array<{
+        podSelector?: { matchLabels?: Record<string, string> };
+        namespaceSelector?: { matchLabels?: Record<string, string> };
+        ipBlock?: { cidr: string; except?: string[] };
+      }>;
+      ports?: Array<{
+        protocol?: string;
+        port?: number | string;
+        endPort?: number;
+      }>;
+    }>;
+  };
+}
+
+export type K8sResource = K8sPod | K8sService | K8sDeployment | K8sIngress | K8sConfigMap | K8sSecret | K8sPersistentVolumeClaim | K8sNetworkPolicy;
 
 export interface K8sResourceList<T> {
   kind: string;
@@ -181,5 +276,7 @@ export interface ClusterData {
   ingresses: K8sIngress[];
   configMaps: K8sConfigMap[];
   secrets: K8sSecret[];
+  persistentVolumeClaims: K8sPersistentVolumeClaim[];
+  networkPolicies: K8sNetworkPolicy[];
   namespaces: string[];
 }

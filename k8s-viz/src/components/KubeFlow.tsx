@@ -94,6 +94,7 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
       service: '#3b82f6',
       deployment: '#22c55e',
       pod: '#14b8a6',
+      container: '#64748b',
       configmap: '#f97316',
       secret: '#ef4444',
     };
@@ -201,7 +202,7 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded bg-amber-500"></span>
-                <span>Ingress Controller</span>
+                <span>Ingress Controller / Proxy</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded bg-violet-400"></span>
@@ -215,8 +216,12 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
                 <span className="w-3 h-3 rounded bg-teal-500"></span>
                 <span>Pod</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded bg-cyan-400"></span>
+                <span>Sidecar Container</span>
+              </div>
               <div className="mt-2 pt-2 border-t border-gray-200 text-gray-500">
-                Shows how external traffic flows through the ingress controller to your services
+                Multi-container pods show sidecars as child nodes
               </div>
             </div>
           ) : (
@@ -228,7 +233,7 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded bg-amber-500"></span>
-                  <span>Ingress Controller</span>
+                  <span>Proxy</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded bg-blue-500"></span>
@@ -243,6 +248,10 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
                   <span>Pod</span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded bg-cyan-400"></span>
+                  <span>Sidecar</span>
+                </div>
+                <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded bg-orange-500"></span>
                   <span>ConfigMap</span>
                 </div>
@@ -251,15 +260,8 @@ export function KubeFlow({ initialData, error }: KubeFlowProps) {
                   <span>Secret</span>
                 </div>
               </div>
-              <div className="mt-2 pt-2 border-t border-gray-200">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-0.5 bg-gray-400"></div>
-                  <span>Solid: Traffic flow</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-0.5 bg-gray-400 border-dashed border-t-2 border-gray-400"></div>
-                  <span>Dashed: Config reference</span>
-                </div>
+              <div className="mt-2 pt-2 border-t border-gray-200 text-gray-500">
+                Multi-container pods show all containers
               </div>
             </>
           )}
