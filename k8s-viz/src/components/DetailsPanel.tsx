@@ -1,7 +1,9 @@
 'use client';
 
-import { X, Terminal } from 'lucide-react';
+import { useState } from 'react';
+import { X, Terminal, RefreshCw, Square, Play, Minus, Plus } from 'lucide-react';
 import { useLogsModal } from './LogsModalContext';
+import { ConfirmDialog } from './ConfirmDialog';
 import type { K8sNodeData } from '@/lib/graph-builder';
 import type {
   K8sPod,
@@ -151,8 +153,118 @@ function ServiceDetails({ service }: { service: K8sService }) {
 
 function DeploymentDetails({ deployment }: { deployment: K8sDeployment }) {
   const { replicas = 0, readyReplicas = 0, availableReplicas = 0 } = deployment.status;
+  const namespace = deployment.metadata.namespace || 'default';
+  const name = deployment.metadata.name;
+
+  const [confirmAction, setConfirmAction] = useState<'restart' | 'stop' | null>(null);
+  const [scaleValue, setScaleValue] = useState(replicas);
+  const [isScaling, setIsScaling] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  const handleRestart = async () => {
+    setActionError(null);
+    try {
+      const response = await fetch(`/api/k8s/deployments/${namespace}/${name}/restart`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to restart');
+      }
+      setActionSuccess('Restart initiated');
+      setTimeout(() => setActionSuccess(null), 3000);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to restart');
+    } finally {
+      setConfirmAction(null);
+    }
+  };
+
+  const handleScale = async (newReplicas: number) => {
+    setActionError(null);
+    setIsScaling(true);
+    try {
+      const response = await fetch(`/api/k8s/deployments/${namespace}/${name}/scale`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replicas: newReplicas }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to scale');
+      }
+      setScaleValue(newReplicas);
+      setActionSuccess(`Scaled to ${newReplicas} replicas`);
+      setTimeout(() => setActionSuccess(null), 3000);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to scale');
+    } finally {
+      setIsScaling(false);
+      setConfirmAction(null);
+    }
+  };
+
+  const handleStop = async () => {
+    await handleScale(0);
+  };
+
   return (
     <>
+      <Section title="Actions">
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button
+            onClick={() => setConfirmAction('restart')}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Restart
+          </button>
+          {replicas > 0 ? (
+            <button
+              onClick={() => setConfirmAction('stop')}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+            >
+              <Square className="w-3 h-3" />
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={() => handleScale(1)}
+              disabled={isScaling}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors disabled:opacity-50"
+            >
+              <Play className="w-3 h-3" />
+              Start
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500">Scale:</span>
+          <button
+            onClick={() => scaleValue > 0 && handleScale(scaleValue - 1)}
+            disabled={scaleValue <= 0 || isScaling}
+            className="p-1 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Minus className="w-3 h-3" />
+          </button>
+          <span className="w-8 text-center text-sm font-mono">{scaleValue}</span>
+          <button
+            onClick={() => handleScale(scaleValue + 1)}
+            disabled={isScaling}
+            className="p-1 rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        </div>
+        {actionError && (
+          <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded">{actionError}</div>
+        )}
+        {actionSuccess && (
+          <div className="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded">{actionSuccess}</div>
+        )}
+      </Section>
+
       <Section title="Replicas">
         <KeyValue label="Desired" value={replicas} />
         <KeyValue label="Ready" value={readyReplicas} />
@@ -173,6 +285,26 @@ function DeploymentDetails({ deployment }: { deployment: K8sDeployment }) {
           </div>
         ))}
       </Section>
+
+      <ConfirmDialog
+        isOpen={confirmAction === 'restart'}
+        title="Restart Deployment"
+        message={`This will perform a rolling restart of "${name}". All pods will be recreated.`}
+        confirmLabel="Restart"
+        variant="warning"
+        onConfirm={handleRestart}
+        onCancel={() => setConfirmAction(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmAction === 'stop'}
+        title="Stop Deployment"
+        message={`This will scale "${name}" to 0 replicas. The deployment will have no running pods.`}
+        confirmLabel="Stop"
+        variant="danger"
+        onConfirm={handleStop}
+        onCancel={() => setConfirmAction(null)}
+      />
     </>
   );
 }
